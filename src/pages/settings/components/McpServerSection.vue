@@ -8,7 +8,6 @@ const { t } = useI18n()
 const enabled = ref(false)
 const transport = ref<'stdio' | 'http'>('http')
 const port = ref(3000)
-const autoStart = ref(false)
 const apiKey = ref('')
 
 // 状态
@@ -18,6 +17,7 @@ const serverUptime = ref<number>()
 const isStarting = ref(false)
 const isStopping = ref(false)
 const portError = ref('')
+const startError = ref('')
 const serverPath = ref<string>('')
 const dbDir = ref<string>('')
 const showStdioConfig = ref(false)
@@ -46,7 +46,6 @@ async function loadConfig() {
     enabled.value = config.enabled
     transport.value = config.transport
     port.value = config.port
-    autoStart.value = config.autoStart
     apiKey.value = config.apiKey || ''
   } catch (error) {
     console.error('Failed to load MCP config:', error)
@@ -60,7 +59,7 @@ async function saveConfig() {
       enabled: enabled.value,
       transport: transport.value,
       port: port.value,
-      autoStart: autoStart.value,
+      autoStart: false,
       apiKey: apiKey.value,
     })
   } catch (error) {
@@ -80,29 +79,27 @@ async function refreshStatus() {
   }
 }
 
-// 启动服务
-async function handleStart() {
-  if (portError.value) return
-
-  isStarting.value = true
-  try {
-    // 先保存配置
-    await saveConfig()
-    const result = await window.mcpApi.start()
-    if (!result.success) {
-      console.error('Failed to start MCP server:', result.error)
+// Claude Desktop JSON 配置片段
+const claudeDesktopSnippet = computed(() => {
+  if (transport.value === 'http') {
+    const entry: Record<string, unknown> = { url: `http://127.0.0.1:${port.value}/sse` }
+    if (apiKey.value) {
+      entry.headers = { Authorization: `Bearer ${apiKey.value}` }
     }
-    // 短暂延迟后刷新状态
-    setTimeout(refreshStatus, 500)
-  } catch (error) {
-    console.error('Failed to start MCP server:', error)
-  } finally {
-    isStarting.value = false
+    return JSON.stringify({ mcpServers: { chatlab: entry } }, null, 2)
   }
-}
+  return JSON.stringify({
+    mcpServers: {
+      chatlab: {
+        command: 'node',
+        args: [serverPath.value || '[server-path]', '--db-dir', dbDir.value || '[db-dir]'],
+      },
+    },
+  }, null, 2)
+})
 
-// 停止服务
-async function handleStop() {
+// 停止服务（内部使用）
+async function stopServer() {
   isStopping.value = true
   try {
     await window.mcpApi.stop()
@@ -127,18 +124,67 @@ function validatePort(val: number) {
 async function handleTransportChange(mode: string | number) {
   transport.value = mode as 'stdio' | 'http'
   await saveConfig()
+  if (mode === 'stdio' && isRunning.value) {
+    // 切到 stdio：停止正在运行的 HTTP server
+    await stopServer()
+  } else if (mode === 'http' && enabled.value && !isRunning.value) {
+    // 切到 HTTP 且已启用：自动启动服务
+    startError.value = ''
+    isStarting.value = true
+    try {
+      const result = await window.mcpApi.start()
+      if (!result.success) {
+        startError.value = result.error || t('settings.basic.mcp.startError')
+      }
+      setTimeout(refreshStatus, 500)
+    } catch (error) {
+      startError.value = error instanceof Error ? error.message : t('settings.basic.mcp.startError')
+    } finally {
+      isStarting.value = false
+    }
+  }
 }
 
-// 开关切换
+// 开关切换：HTTP 模式直接启动/停止服务，Stdio 模式仅保存配置
 async function handleEnabledChange(val: boolean) {
   enabled.value = val
-  await saveConfig()
-}
-
-// 自启动切换
-async function handleAutoStartChange(val: boolean) {
-  autoStart.value = val
-  await saveConfig()
+  startError.value = ''
+  if (transport.value === 'http') {
+    if (val) {
+      if (portError.value) {
+        enabled.value = false
+        return
+      }
+      isStarting.value = true
+      try {
+        await saveConfig()
+        const result = await window.mcpApi.start()
+        if (!result.success) {
+          startError.value = result.error || t('settings.basic.mcp.startError')
+          console.error('Failed to start MCP server:', result.error)
+        }
+        setTimeout(refreshStatus, 500)
+      } catch (error) {
+        startError.value = error instanceof Error ? error.message : t('settings.basic.mcp.startError')
+        console.error('Failed to start MCP server:', error)
+      } finally {
+        isStarting.value = false
+      }
+    } else {
+      isStopping.value = true
+      try {
+        await saveConfig()
+        await window.mcpApi.stop()
+        setTimeout(refreshStatus, 500)
+      } catch (error) {
+        console.error('Failed to stop MCP server:', error)
+      } finally {
+        isStopping.value = false
+      }
+    }
+  } else {
+    await saveConfig()
+  }
 }
 
 // 端口失焦保存
@@ -207,12 +253,17 @@ onUnmounted(() => {
             {{ t('settings.basic.mcp.enableDesc') }}
           </p>
         </div>
-        <USwitch :model-value="enabled" @update:model-value="handleEnabledChange" />
+        <USwitch
+          :model-value="enabled"
+          :loading="isStarting || isStopping"
+          :disabled="isStarting || isStopping"
+          @update:model-value="handleEnabledChange"
+        />
       </div>
 
       <template v-if="enabled">
-        <!-- 运行状态 -->
-        <div class="mt-4 flex items-center justify-between">
+        <!-- 运行状态（仅 HTTP 模式） -->
+        <div v-if="transport === 'http'" class="mt-4">
           <div class="flex items-center gap-2">
             <span
               class="inline-block h-2 w-2 rounded-full"
@@ -228,32 +279,7 @@ onUnmounted(() => {
               PID: {{ serverPid }}
             </span>
           </div>
-          <div class="flex gap-2">
-            <UButton
-              v-if="!isRunning"
-              :loading="isStarting"
-              :disabled="isStarting"
-              color="primary"
-              variant="soft"
-              size="sm"
-              @click="handleStart"
-            >
-              <UIcon name="i-heroicons-play" class="mr-1 h-4 w-4" />
-              {{ t('settings.basic.mcp.start') }}
-            </UButton>
-            <UButton
-              v-else
-              :loading="isStopping"
-              :disabled="isStopping"
-              color="error"
-              variant="soft"
-              size="sm"
-              @click="handleStop"
-            >
-              <UIcon name="i-heroicons-stop" class="mr-1 h-4 w-4" />
-              {{ t('settings.basic.mcp.stop') }}
-            </UButton>
-          </div>
+          <p v-if="startError" class="mt-1 text-xs text-red-500">{{ startError }}</p>
         </div>
 
         <!-- 传输模式 -->
@@ -353,19 +379,6 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 自启动 -->
-        <div class="mt-4 flex items-center justify-between">
-          <div class="flex-1 pr-4">
-            <p class="text-sm font-medium text-gray-900 dark:text-white">
-              {{ t('settings.basic.mcp.autoStart') }}
-            </p>
-            <p class="text-xs text-gray-500 dark:text-gray-400">
-              {{ t('settings.basic.mcp.autoStartDesc') }}
-            </p>
-          </div>
-          <USwitch :model-value="autoStart" @update:model-value="handleAutoStartChange" />
-        </div>
-
         <!-- 外部配置提示 -->
         <div class="mt-4">
           <button
@@ -384,6 +397,14 @@ onUnmounted(() => {
             <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
               {{ t('settings.basic.mcp.externalConfigDesc') }}
             </p>
+            <div v-if="transport === 'stdio'" class="mb-3 rounded-md bg-amber-50 p-2 dark:bg-amber-900/20">
+              <div class="flex items-start gap-2">
+                <UIcon name="i-heroicons-exclamation-triangle" class="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-amber-500" />
+                <p class="text-xs text-amber-700 dark:text-amber-300">
+                  {{ t('settings.basic.mcp.stdioAbiWarning') }}
+                </p>
+              </div>
+            </div>
             <div class="space-y-2">
               <div>
                 <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
@@ -438,6 +459,24 @@ onUnmounted(() => {
                     <UIcon name="i-heroicons-clipboard" class="h-3 w-3" />
                   </UButton>
                 </div>
+              </div>
+              <div>
+                <div class="mb-1 flex items-center justify-between">
+                  <label class="text-xs font-medium text-gray-600 dark:text-gray-400">
+                    {{ t('settings.basic.mcp.claudeDesktopConfig') }}
+                  </label>
+                  <UButton
+                    variant="ghost"
+                    size="xs"
+                    @click="copyToClipboard(claudeDesktopSnippet)"
+                  >
+                    <UIcon name="i-heroicons-clipboard" class="h-3 w-3" />
+                  </UButton>
+                </div>
+                <p class="mb-1 text-xs text-gray-400 dark:text-gray-500">
+                  {{ t('settings.basic.mcp.claudeDesktopConfigDesc') }}
+                </p>
+                <pre class="overflow-x-auto rounded bg-gray-200 px-2 py-1 text-xs dark:bg-gray-700">{{ claudeDesktopSnippet }}</pre>
               </div>
             </div>
           </div>

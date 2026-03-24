@@ -53,7 +53,7 @@
     "mcp": {
       "title": "MCP Server",
       "enable": "启用 MCP Server",
-      "enableDesc": "启动 MCP 服务，允许 Claude Code、Cursor 等外部 AI 工具访问聊天记录分析能力",
+      "enableDesc": "HTTP 模式：开关直接启动/停止服务。Stdio 模式：开关控制外部工具配置信息的显示。",
       "statusRunning": "运行中",
       "statusStopped": "已停止",
       "start": "启动",
@@ -72,7 +72,11 @@
       "apiKey": "API Key 认证",
       "apiKeyDesc": "设置后，HTTP 接口需要在请求头中携带 Bearer Token 才能访问",
       "apiKeyPlaceholder": "留空则不启用认证",
-      "noAuthWarning": "HTTP 服务未设置 API Key 认证，任何本地程序均可访问数据"
+      "noAuthWarning": "HTTP 服务未设置 API Key 认证，任何本地程序均可访问数据",
+      "claudeDesktopConfig": "Claude Desktop 配置片段",
+      "claudeDesktopConfigDesc": "复制以下 JSON，粘贴到 Claude Desktop 的 claude_desktop_config.json 文件中",
+      "startError": "启动失败",
+      "stdioAbiWarning": "Stdio 模式注意：内置二进制文件已按 Electron 的 Node.js ABI 编译，使用系统 Node.js 运行时，若版本不匹配将无法加载原生模块。建议大多数集成场景使用 HTTP 模式。"
     }
   },
   "aiConfig": {

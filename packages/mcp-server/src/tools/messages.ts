@@ -131,6 +131,38 @@ export function registerMessageTools(server: McpServer): void {
   )
 
   server.tool(
+    'get_date_range_messages',
+    'Get messages within a specific date range (YYYY-MM-DD). Useful for analyzing what was discussed during a particular period.',
+    {
+      session_id: z.string().describe('The session ID (from list_sessions)'),
+      start_date: z.string().describe('Start date in YYYY-MM-DD format (inclusive)'),
+      end_date: z.string().describe('End date in YYYY-MM-DD format (inclusive)'),
+      sender_id: z.number().optional().describe('Optional: filter by sender member ID'),
+      limit: z.number().optional().default(200).describe('Max messages to return (default: 200)'),
+    },
+    async ({ session_id, start_date, end_date, sender_id, limit }) => {
+      const db = openDatabase(session_id)
+      if (!db) {
+        return { content: [{ type: 'text', text: `Session "${session_id}" not found.` }] }
+      }
+
+      const result = queries.getDateRangeMessages(db, start_date, end_date, { senderId: sender_id, limit })
+
+      if (result.messages.length === 0) {
+        return { content: [{ type: 'text', text: `No messages found between ${start_date} and ${end_date}.` }] }
+      }
+
+      const text = [
+        `Messages from ${start_date} to ${end_date} (${result.messages.length} of ${result.total} total):`,
+        '',
+        formatMessages(result.messages),
+      ].join('\n')
+
+      return { content: [{ type: 'text', text }] }
+    }
+  )
+
+  server.tool(
     'export_messages',
     'Export chat messages matching filters as formatted text. Useful for creating reports or sharing conversation excerpts.',
     {

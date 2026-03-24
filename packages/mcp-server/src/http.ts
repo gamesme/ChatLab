@@ -33,7 +33,8 @@ export async function startHttpServer(server: McpServer, port: number, apiKey?: 
   // ==================== API Key Authentication ====================
 
   if (apiKey) {
-    app.use('/api', (req, res, next) => {
+    app.use((req, res, next) => {
+      if (req.method === 'OPTIONS') { next(); return }
       const authHeader = req.headers.authorization
       const provided = authHeader?.startsWith('Bearer ')
         ? authHeader.slice(7)
@@ -45,7 +46,7 @@ export async function startHttpServer(server: McpServer, port: number, apiKey?: 
       }
       next()
     })
-    console.error('[ChatLab MCP] API key authentication enabled for /api/ endpoints')
+    console.error('[ChatLab MCP] API key authentication enabled for all endpoints (SSE + REST)')
   }
 
   // ==================== MCP SSE Transport ====================
@@ -227,6 +228,58 @@ export async function startHttpServer(server: McpServer, port: number, apiKey?: 
 
     const result = queries.getWordFrequency(db, { topN, minCount })
     res.json(result)
+  })
+
+  // Get messages by date range
+  app.get('/api/v1/sessions/:id/messages/range', (req, res) => {
+    const db = openDatabase(req.params.id)
+    if (!db) {
+      res.status(404).json({ error: 'Session not found' })
+      return
+    }
+
+    const startDate = req.query.start as string
+    const endDate = req.query.end as string
+    if (!startDate || !endDate) {
+      res.status(400).json({ error: 'Missing required query params: start, end (YYYY-MM-DD)' })
+      return
+    }
+
+    const limit = req.query.limit ? Number(req.query.limit) : 200
+    const senderId = req.query.sender_id ? Number(req.query.sender_id) : undefined
+
+    const result = queries.getDateRangeMessages(db, startDate, endDate, { senderId, limit })
+    res.json(result)
+  })
+
+  // Get member profile
+  app.get('/api/v1/sessions/:id/members/:memberId/profile', (req, res) => {
+    const db = openDatabase(req.params.id)
+    if (!db) {
+      res.status(404).json({ error: 'Session not found' })
+      return
+    }
+
+    const memberId = Number(req.params.memberId)
+    const profile = queries.getMemberProfile(db, memberId)
+    if (!profile) {
+      res.status(404).json({ error: 'Member not found' })
+      return
+    }
+    res.json(profile)
+  })
+
+  // Get interaction frequency between member pairs
+  app.get('/api/v1/sessions/:id/interaction-frequency', (req, res) => {
+    const db = openDatabase(req.params.id)
+    if (!db) {
+      res.status(404).json({ error: 'Session not found' })
+      return
+    }
+
+    const topN = req.query.top_n ? Number(req.query.top_n) : 10
+    const pairs = queries.getInteractionFrequency(db, topN)
+    res.json({ pairs, total: pairs.length })
   })
 
   // Execute SQL

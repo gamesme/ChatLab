@@ -270,7 +270,7 @@ export function registerMcpHandlers(_context: IpcContext): void {
 
   // 自动启动
   const config = loadConfig()
-  if (config.enabled && config.autoStart) {
+  if (config.enabled && config.transport === 'http') {
     console.log('[MCP] Auto-starting server...')
     const result = startServer(config)
     if (!result.success) {
